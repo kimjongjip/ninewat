@@ -35,7 +35,7 @@ def generate_html(latitude, longitude, zoom):
     <head>
     <meta charset="UTF-8">
     <title>브이월드 지도</title>
-    <script type="text/javascript" src="https://map.vworld.kr/js/vworldMapInit.js.do?version=2.0&apiKey=92F3EA05-2445-3421-9F3F-9537BC9BC978"></script>
+    <script type="text/javascript" src="https://map.vworld.kr/js/vworldMapInit.js.do?version=2.0&apiKey=YourAPI"></script>
     <style>
         #vmap {{
             width: 100%;
