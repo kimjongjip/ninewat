@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>브이월드 지도</title>
+<script type="text/javascript" src="https://map.vworld.kr/js/vworldMapInit.js.do?version=2.0&apiKey=yourAPI"></script>
+<style>
+    #vmap {
+        width: 100%;
+        height: 75vh; /* 화면 높이의 75%를 차지 */
+        left: 0px;
+        top: 0px;
+    }
+    #buttons {
+        margin-top: 10px;
+    }
+</style>
+</head>
+<body>
+ <div id="vmap"></div>
+ <div id="buttons">
+  <button type="button" onclick="setMode(vw.ol3.BasemapType.GRAPHIC);">배경지도</button>
+  <button type="button" onclick="setMode(vw.ol3.BasemapType.GRAPHIC_WHITE);">백지도</button>
+  <button type="button" onclick="setMode(vw.ol3.BasemapType.GRAPHIC_NIGHT);">야간지도</button>
+  <button type="button" onclick="setMode(vw.ol3.BasemapType.PHOTO);">항공사진</button>
+  <button type="button" onclick="setMode(vw.ol3.BasemapType.PHOTO_HYBRID);">하이브리드</button>
+ </div>
+ <script type="text/javascript">
+  vw.ol3.MapOptions = {
+      basemapType: vw.ol3.BasemapType.PHOTO,  // 기본 지도 타입을 항공사진으로 설정
+      controlDensity: vw.ol3.DensityType.EMPTY,
+      interactionDensity: vw.ol3.DensityType.BASIC,
+      controlsAutoArrange: true,
+      homePosition: vw.ol3.CameraPosition,
+      initPosition: vw.ol3.CameraPosition
+  };
+
+  var vmap = new vw.ol3.Map("vmap", vw.ol3.MapOptions);
+
+  // 특정 좌표로 이동하고 마커를 추가하는 함수
+  function moveToLocation() {
+      var position = ol.proj.fromLonLat([126.9563833, 37.55184529]);
+      vmap.getView().setCenter(position);
+      vmap.getView().setZoom(25);
+
+      // 마커 레이어를 생성
+      var markerLayer = new vw.ol3.layer.Marker(vmap);
+      vmap.addLayer(markerLayer);
+
+      // 마커 추가
+      var marker = new vw.ol3.marker({
+          position: position,
+          map: vmap
+      });
+      
+      markerLayer.addMarker(marker);
+  }
+
+  // 지도 타입 변경 함수
+  function setMode(basemapType) {
+      vmap.setBasemapType(basemapType);
+  }
+
+  // 페이지 로드 시 기본 위치로 이동하고 마커 추가
+  document.addEventListener('DOMContentLoaded', function() {
+      moveToLocation();
+  });
+ </script>
+</body>
+</html>
