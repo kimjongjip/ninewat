@@ -161,35 +161,23 @@ for idx, result in enumerate(results):
     center_longitude = result[3]
     center_latitude = result[4]
     building_name = result[5]
-
-    # GeoJSON을 Shapely 객체로 변환
     roof_polygon = shape(json.loads(geom_json))
-
-    # 위성 이미지 생성 및 스크린샷 저장
     html_file_path = generate_html(center_latitude, center_longitude, 25, idx)
     driver.get(f"file://{os.path.abspath(html_file_path)}")
     time.sleep(5)
     screenshot_path = f"screenshot_{idx}.png"
     driver.save_screenshot(screenshot_path)
-
-    # HTML 파일 삭제
     os.remove(html_file_path)
-
-    # 스크린샷 로드 및 객체 탐지
     image = cv2.imread(screenshot_path)
     boxes = detect_objects(image)
-
-    # 경계 추출된 객체를 다각형으로 변환
     object_polygons = [Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)]) for x1, y1, x2, y2 in boxes]
-
-    # Shapely의 unary_union을 사용하여 모든 객체 다각형 합침
     object_union = unary_union(object_polygons)
 
-    # 옥상의 전체 다각형에서 객체 다각형을 차감하여 순수 옥상 면적 계산
+    
     net_roof_polygon = roof_polygon.difference(object_union)
     net_area = net_roof_polygon.area
 
-    # MultiPolygon 처리
+    
     if isinstance(net_roof_polygon, Polygon):
         utm_roof_polygon = transform_polygon(net_roof_polygon, transformer)
     elif isinstance(net_roof_polygon, MultiPolygon):
@@ -197,7 +185,7 @@ for idx, result in enumerate(results):
     else:
         raise TypeError("The net_roof_polygon is neither a Polygon nor a MultiPolygon")
 
-    # 빈 30m x 30m 공간이 있는지 확인
+    
     has_empty_space = find_empty_space(utm_roof_polygon, 30, 30)
 
     print(f"건물 이름 {building_name}의 총 면적: {area:.2f} 평방미터, 순수 옥상의 면적: {net_area:.2f} 평방미터, 빈 30m x 30m 공간 존재 여부: {'예' if has_empty_space else '아니오'}")
