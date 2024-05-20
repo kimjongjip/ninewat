@@ -10,7 +10,6 @@ import time
 from pyproj import Transformer, CRS
 import os
 
-# 데이터베이스 연결 설정
 conn = psycopg2.connect(
     dbname="postgres",
     user="kimjongjip",
@@ -19,10 +18,9 @@ conn = psycopg2.connect(
     port="5432"
 )
 
-# 커서 생성
 cursor = conn.cursor()
 
-# 쿼리 실행 (여러 건물의 geom 값을 가져옴)
+
 query = """
 SELECT 
     id,
@@ -46,15 +44,14 @@ WHERE
 cursor.execute(query)
 results = cursor.fetchall()
 
-# 커서 및 연결 닫기
+
 cursor.close()
 conn.close()
 
-# Selenium 설정
+
 options = webdriver.SafariOptions()
 driver = webdriver.Safari(options=options)
 
-# HTML 파일 생성 함수
 def generate_html(latitude, longitude, zoom, index):
     html_content = f"""
     <!DOCTYPE html>
@@ -129,7 +126,6 @@ def generate_html(latitude, longitude, zoom, index):
         file.write(html_content)
     return file_path
 
-# YOLOv5 모델 로드
 model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 
 def detect_objects(image):
@@ -148,7 +144,6 @@ def find_empty_space(polygon, min_width, min_height):
                 return True
     return False
 
-# 좌표 변환 설정 (EPSG:5186 -> EPSG:32652)
 transformer = Transformer.from_crs(5186, 32652, always_xy=True)
 
 def transform_polygon(polygon, transformer):
@@ -159,7 +154,6 @@ def transform_multipolygon(multipolygon, transformer):
     transformed_polygons = [transform_polygon(polygon, transformer) for polygon in multipolygon.geoms]
     return MultiPolygon(transformed_polygons)
 
-# 각 건물에 대해 처리
 for idx, result in enumerate(results):
     building_id = result[0]
     area = result[1]
