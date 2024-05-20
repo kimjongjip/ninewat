@@ -1,0 +1,235 @@
+import psycopg2
+import torch
+import cv2
+import numpy as np
+from shapely.geometry import shape, Polygon, MultiPolygon, box
+from shapely.ops import unary_union
+import json
+from selenium import webdriver
+import time
+from pyproj import Transformer, CRS
+import os
+from ultralytics import YOLO
+
+# 데이터베이스 연결 설정
+conn = psycopg2.connect(
+    dbname="postgres",
+    user="kimjongjip",
+    password="anivia0806?",
+    host="localhost",
+    port="5432"
+)
+
+# 커서 생성
+cursor = conn.cursor()
+
+# 쿼리 실행 (여러 건물의 geom 값을 가져옴)
+query = """
+SELECT 
+    id,
+    a12 AS area,
+    ST_AsGeoJSON(geom) AS geom_json,
+    ST_X(ST_Transform(ST_Centroid(geom), 4326)) AS center_longitude,
+    ST_Y(ST_Transform(ST_Centroid(geom), 4326)) AS center_latitude,
+    a24 AS name
+FROM 
+    public."seoul_geom_real"
+WHERE
+    (ST_XMax(ST_Envelope(geom)) - ST_XMin(ST_Envelope(geom)) >= 30) AND 
+    (ST_YMax(ST_Envelope(geom)) - ST_YMin(ST_Envelope(geom)) >= 30) AND
+    a12 >= 925 AND
+    a11 = '철근콘크리트구조' AND
+    a24 NOT LIKE '%중학교%' AND
+    a24 NOT LIKE '%등학교%' AND
+    a9 NOT LIKE '%주택%';
+"""
+
+cursor.execute(query)
+results = cursor.fetchall()
+
+# 커서 및 연결 닫기
+cursor.close()
+conn.close()
+
+# Selenium 설정
+options = webdriver.SafariOptions()
+
+# 새로운 SafariDriver 세션 시작
+driver = webdriver.Safari(options=options)
+
+# HTML 파일 생성 함수
+def generate_html(latitude, longitude, zoom, index):
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="UTF-8">
+    <title>브이월드 지도</title>
+    <script type="text/javascript" src="https://map.vworld.kr/js/vworldMapInit.js.do?version=2.0&apiKey=92F3EA05-2445-3421-9F3F-9537BC9BC978"></script>
+    <style>
+        #vmap1 {{
+            width: 99%;
+            height: 75vh; /* 화면 높이의 75%를 차지 */
+            display: inline-block;
+        }}
+        
+    </style>
+    </head>
+    <body>
+     <div id="vmap1"></div>
+     <script type="text/javascript">
+      var mapOptions1 = {{
+          basemapType: vw.ol3.BasemapType.PHOTO,  // 기본 지도 타입을 배경지도로 설정
+          controlDensity: vw.ol3.DensityType.EMPTY,
+          interactionDensity: vw.ol3.DensityType.BASIC,
+          controlsAutoArrange: true,
+          homePosition: vw.ol3.CameraPosition,
+          initPosition: vw.ol3.CameraPosition
+      }};
+      
+      
+      var vmap1 = new vw.ol3.Map("vmap1", mapOptions1);
+
+      // 특정 좌표로 이동하고 마커를 추가하는 함수
+      function moveToLocation(map, longitude, latitude, zoom) {{
+          var position = ol.proj.fromLonLat([longitude, latitude]);
+          map.getView().setCenter(position);
+          map.getView().setZoom(zoom);
+
+          // 마커 옵션 설정
+          var markerOption = {{
+              x: longitude,
+              y: latitude,
+              epsg: "EPSG:4326",
+              title: '기본 마커',
+              iconUrl: 'http://map.vworld.kr/images/ol3/marker_blue.png',
+              text: {{
+                  offsetX: 0.5,
+                  offsetY: 20,
+                  font: '12px Calibri,sans-serif',
+                  fill: {{color: '#000'}},
+                  stroke: {{color: '#fff', width: 2}},
+              }},
+              attr: {{"id": "defaultMarker", "name": "기본 마커"}}
+          }};
+
+          // 마커 레이어 생성
+          var markerLayer = new vw.ol3.layer.Marker(map);
+          map.addLayer(markerLayer);
+
+          // 마커 추가
+          markerLayer.addMarker(markerOption);
+      }}
+
+      // 페이지 로드 시 기본 위치로 이동하고 마커 추가
+      document.addEventListener('DOMContentLoaded', function() {{
+          moveToLocation(vmap1, {longitude}, {latitude}, {zoom});
+      }});
+     </script>
+    </body>
+    </html>
+    """
+    file_path = f"map_{index}.html"
+    with open(file_path, "w", encoding="utf-8") as file:
+        file.write(html_content)
+    return file_path
+
+# YOLOv8 모델 로드
+model = YOLO('yolov8s.pt')
+
+def detect_objects(image):
+    results = model(image)
+    boxes = results[0].boxes.xyxy.cpu().numpy()[:, :4]  # x1, y1, x2, y2
+    return boxes
+
+def find_empty_space(polygon, min_width, min_height):
+    min_x, min_y, max_x, max_y = polygon.bounds
+    if max_x - min_x < min_width or max_y - min_y < min_height:
+        return False  # Polygon is too small for the specified empty space
+    for x in np.arange(min_x, max_x - min_width, 1):
+        for y in np.arange(min_y, max_y - min_height, 1):
+            rect = box(x, y, x + min_width, y + min_height)  # Shapely의 box 함수 사용
+            if polygon.contains(rect):
+                return True
+    return False
+
+# 좌표 변환 설정 (EPSG:5186 -> EPSG:32652)
+src_crs = CRS.from_epsg(5186)
+dst_crs = CRS.from_epsg(32652)
+transformer = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+
+def transform_polygon(polygon, transformer):
+    transformed_coords = []
+    for point in polygon.exterior.coords:
+        try:
+            # 좌표 변환 시 (x, y) 순서로 변환
+            transformed_point = transformer.transform(point[0], point[1])
+            if np.isinf(transformed_point).any():
+                raise ValueError(f"Transformed point is inf: {transformed_point}")
+            transformed_coords.append(transformed_point)
+        except Exception as e:
+            print(f"Error transforming point {point}: {e}")
+            transformed_coords.append((np.nan, np.nan))
+    return Polygon(transformed_coords)
+
+def transform_multipolygon(multipolygon, transformer):
+    transformed_polygons = []
+    for polygon in multipolygon.geoms:  # multipolygon을 반복 처리할 때 geoms 속성 사용
+        transformed_polygon = transform_polygon(polygon, transformer)
+        transformed_polygons.append(transformed_polygon)
+    return MultiPolygon(transformed_polygons)
+
+# 각 건물에 대해 처리
+for idx, result in enumerate(results):
+    building_id = result[0]
+    area = result[1]
+    geom_json = result[2]
+    center_longitude = result[3]
+    center_latitude = result[4]
+    building_name = result[5]
+
+    # GeoJSON을 Shapely 객체로 변환
+    roof_polygon = shape(json.loads(geom_json))
+
+    # 위성 이미지 생성 및 스크린샷 저장
+    html_file_path = generate_html(center_latitude, center_longitude, 25, idx)
+    driver.get(f"file://{os.path.abspath(html_file_path)}")
+    time.sleep(5)
+    screenshot_path = f"screenshot_{idx}.png"
+    driver.save_screenshot(screenshot_path)
+
+    # HTML 파일 삭제
+    os.remove(html_file_path)
+
+    # 스크린샷 로드 및 객체 탐지
+    image = cv2.imread(screenshot_path)
+    boxes = detect_objects(image)
+
+    # 경계 추출된 객체를 다각형으로 변환
+    object_polygons = []
+    for box_coords in boxes:
+        x1, y1, x2, y2 = box_coords
+        object_polygon = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+        object_polygons.append(object_polygon)
+
+    # Shapely의 unary_union을 사용하여 모든 객체 다각형 합침
+    object_union = unary_union(object_polygons)
+
+    # 옥상의 전체 다각형에서 객체 다각형을 차감하여 순수 옥상 면적 계산
+    net_roof_polygon = roof_polygon.difference(object_union)
+    net_area = net_roof_polygon.area
+
+    # MultiPolygon 처리
+    if isinstance(net_roof_polygon, Polygon):
+        utm_roof_polygon = transform_polygon(net_roof_polygon, transformer)
+    elif isinstance(net_roof_polygon, MultiPolygon):
+        utm_roof_polygon = transform_multipolygon(net_roof_polygon, transformer)
+    else:
+        raise TypeError("The net_roof_polygon is neither a Polygon nor a MultiPolygon")
+
+    # 빈 30m x 30m 공간이 있는지 확인
+    has_empty_space = find_empty_space(utm_roof_polygon, 30, 30)
+
+    print(f"건물 이름 {building_name}의 총 면적: {area:.2f} 평방미터, 순수 옥상의 면적: {net_area:.2f} 평방미터, 빈 30m x 30m 공간 존재 여부: {'예' if has_empty_space else '아니오'}")
+
+driver.quit()
