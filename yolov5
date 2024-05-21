@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from shapely.geometry import shape, Polygon, MultiPolygon, box
 from shapely.ops import unary_union
+from shapely.affinity import rotate
 import json
 from selenium import webdriver
 import time
@@ -13,13 +14,12 @@ import os
 conn = psycopg2.connect(
     dbname="postgres",
     user="kimjongjip",
-    password="yourpassword",
+    password="anivia0806?",
     host="localhost",
     port="5432"
 )
 
 cursor = conn.cursor()
-
 
 query = """
 SELECT 
@@ -32,8 +32,8 @@ SELECT
 FROM 
     public."seoul_geom_real"
 WHERE
-    (ST_XMax(ST_Envelope(geom)) - ST_XMin(ST_Envelope(geom)) >= 30) AND 
-    (ST_YMax(ST_Envelope(geom)) - ST_YMin(ST_Envelope(geom)) >= 30) AND
+    (ST_XMax(ST_Envelope(ST_OrientedEnvelope(geom))) - ST_XMin(ST_Envelope(ST_OrientedEnvelope(geom))) >= 30) AND 
+    (ST_YMax(ST_Envelope(ST_OrientedEnvelope(geom))) - ST_YMin(ST_Envelope(ST_OrientedEnvelope(geom))) >= 30) AND
     a12 >= 925 AND
     a11 = '철근콘크리트구조' AND
     a24 NOT LIKE '%중학교%' AND
@@ -44,10 +44,8 @@ WHERE
 cursor.execute(query)
 results = cursor.fetchall()
 
-
 cursor.close()
 conn.close()
-
 
 options = webdriver.SafariOptions()
 driver = webdriver.Safari(options=options)
@@ -130,18 +128,43 @@ model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 
 def detect_objects(image):
     results = model(image)
-    boxes = results.xyxy[0].cpu().numpy()[:, :4]  # x1, y1, x2, y2
+    boxes = results.xyxy[0].cpu().numpy()[:, :4]
     return boxes
 
-def find_empty_space(polygon, min_width, min_height):
+def pixel_to_epsg(pixel_coords, image_bounds, epsg_bounds):
+    (x_pixel, y_pixel) = pixel_coords
+    (min_x_img, min_y_img, max_x_img, max_y_img) = image_bounds
+    (min_x_epsg, min_y_epsg, max_x_epsg, max_y_epsg) = epsg_bounds
+
+    x_epsg = min_x_epsg + (x_pixel - min_x_img) * (max_x_epsg - min_x_epsg) / (max_x_img - min_x_img)
+    y_epsg = min_y_epsg + (y_pixel - min_y_img) * (max_y_epsg - min_y_epsg) / (max_y_img - min_y_img)
+
+    return (x_epsg, y_epsg)
+
+def transform_boxes_to_epsg(boxes, image_bounds, epsg_bounds):
+    object_polygons = []
+    for x1, y1, x2, y2 in boxes:
+        coords_epsg = [
+            pixel_to_epsg((x1, y1), image_bounds, epsg_bounds),
+            pixel_to_epsg((x2, y1), image_bounds, epsg_bounds),
+            pixel_to_epsg((x2, y2), image_bounds, epsg_bounds),
+            pixel_to_epsg((x1, y2), image_bounds, epsg_bounds)
+        ]
+        object_polygons.append(Polygon(coords_epsg))
+    return object_polygons
+
+def find_empty_space(polygon, min_width, min_height, angle_step=5):
     min_x, min_y, max_x, max_y = polygon.bounds
     if max_x - min_x < min_width or max_y - min_y < min_height:
-        return False  # Polygon is too small for the specified empty space
-    for x in np.arange(min_x, max_x - min_width, 1):
-        for y in np.arange(min_y, max_y - min_height, 1):
-            rect = box(x, y, x + min_width, y + min_height)  # Shapely의 box 함수 사용
-            if polygon.contains(rect):
-                return True
+        return False
+
+    for angle in range(0, 360, angle_step):
+        for x in np.arange(min_x, max_x - min_width, 1):
+            for y in np.arange(min_y, max_y - min_height, 1):
+                rect = box(x, y, x + min_width, y + min_height)
+                rotated_rect = rotate(rect, angle, origin='centroid')
+                if polygon.contains(rotated_rect):
+                    return True
     return False
 
 transformer = Transformer.from_crs(5186, 32652, always_xy=True)
@@ -161,23 +184,30 @@ for idx, result in enumerate(results):
     center_longitude = result[3]
     center_latitude = result[4]
     building_name = result[5]
+
     roof_polygon = shape(json.loads(geom_json))
+
     html_file_path = generate_html(center_latitude, center_longitude, 25, idx)
     driver.get(f"file://{os.path.abspath(html_file_path)}")
     time.sleep(5)
     screenshot_path = f"screenshot_{idx}.png"
     driver.save_screenshot(screenshot_path)
+
     os.remove(html_file_path)
+
     image = cv2.imread(screenshot_path)
     boxes = detect_objects(image)
-    object_polygons = [Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)]) for x1, y1, x2, y2 in boxes]
+
+    image_bounds = (0, 0, image.shape[1], image.shape[0])  
+    epsg_bounds = roof_polygon.bounds  
+
+    object_polygons = transform_boxes_to_epsg(boxes, image_bounds, epsg_bounds)
+
     object_union = unary_union(object_polygons)
 
-    
     net_roof_polygon = roof_polygon.difference(object_union)
     net_area = net_roof_polygon.area
 
-    
     if isinstance(net_roof_polygon, Polygon):
         utm_roof_polygon = transform_polygon(net_roof_polygon, transformer)
     elif isinstance(net_roof_polygon, MultiPolygon):
@@ -185,7 +215,6 @@ for idx, result in enumerate(results):
     else:
         raise TypeError("The net_roof_polygon is neither a Polygon nor a MultiPolygon")
 
-    
     has_empty_space = find_empty_space(utm_roof_polygon, 30, 30)
 
     print(f"건물 이름 {building_name}의 총 면적: {area:.2f} 평방미터, 순수 옥상의 면적: {net_area:.2f} 평방미터, 빈 30m x 30m 공간 존재 여부: {'예' if has_empty_space else '아니오'}")
