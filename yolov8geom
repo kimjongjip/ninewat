@@ -212,6 +212,6 @@ for idx, result in enumerate(results):
 
     has_empty_space = find_empty_space(utm_roof_polygon, 30, 30)
 
-    print(f"건물 이름 {building_name}의 총 면적: {area:.2f} 평방미터, 순수 옥상의 면적: {net_area:.2f} 평방미터, 빈 30m x 30m 공간 존재 여부: {'예' if has_empty_space else '아니오'}")
+    print(f"건물 이름 {building_name}의 총 면적: {area:.2f}, 순수 옥상의 면적: {net_area:.2f}, 빈 30m x 30m 공간 존재 여부: {'예' if has_empty_space else '아니오'}")
 
 driver.quit()
